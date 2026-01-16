@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart'; // Import Font Awesome
 import 'widgets/dashboard_item.dart';
 import 'analytics_page.dart';
-import 'tenaga_medis_page.dart'; //
+import 'tenaga_medis_page.dart';
+import 'dokter_page.dart';
 
 class DashboardPage extends StatelessWidget {
   final bool isDarkMode;
@@ -16,7 +18,11 @@ class DashboardPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Dashboard'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('Dashboard'),
+        centerTitle: true,
+        elevation: 0,
+      ),
       drawer: Drawer(
         child: Column(
           children: [
@@ -37,7 +43,9 @@ class DashboardPage extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.logout, color: Colors.red),
               title: const Text('Logout'),
-              onTap: () {},
+              onTap: () {
+                // Tambahkan logika logout di sini
+              },
             ),
           ],
         ),
@@ -45,10 +53,13 @@ class DashboardPage extends StatelessWidget {
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Last update: 26 Feb 2020',
-              style: TextStyle(color: Colors.grey),
+            const Center(
+              child: Text(
+                'Last update: 26 Feb 2020',
+                style: TextStyle(color: Colors.grey),
+              ),
             ),
             const SizedBox(height: 20),
             GridView.count(
@@ -58,7 +69,15 @@ class DashboardPage extends StatelessWidget {
               mainAxisSpacing: 15,
               physics: const NeverScrollableScrollPhysics(),
               children: [
-                DashboardItem(icon: Icons.account_circle, title: 'My Account'),
+                // MENGGUNAKAN FONT AWESOME UNTUK DOKTER (STETOSKOP)
+                DashboardItem(
+                  icon: FontAwesomeIcons.userDoctor,
+                  title: 'Dokter',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const DokterPage()),
+                  ),
+                ),
                 DashboardItem(icon: Icons.inventory, title: 'Inventory'),
                 DashboardItem(icon: Icons.search, title: 'Search Machine'),
                 DashboardItem(
@@ -71,8 +90,9 @@ class DashboardPage extends StatelessWidget {
                     ),
                   ),
                 ),
+                // MENGGUNAKAN FONT AWESOME UNTUK TENAGA MEDIS
                 DashboardItem(
-                  icon: Icons.medical_information,
+                  icon: FontAwesomeIcons.userNurse,
                   title: 'Tenaga Medis',
                   onTap: () => Navigator.push(
                     context,
@@ -92,22 +112,26 @@ class DashboardPage extends StatelessWidget {
 
   Widget _buildSidebarHeader() {
     return Container(
-      height: 150,
+      height: 170,
       width: double.infinity,
       color: const Color.fromARGB(255, 127, 206, 243),
-      padding: const EdgeInsets.only(top: 40, left: 20),
+      padding: const EdgeInsets.only(top: 50, left: 20),
       child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            radius: 25,
+            radius: 30,
             backgroundColor: Colors.white,
-            child: Icon(Icons.person),
+            child: Icon(Icons.person, size: 35, color: Colors.blue),
           ),
-          SizedBox(height: 10),
+          SizedBox(height: 15),
           Text(
             'Halo, Pengguna!',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ],
       ),
