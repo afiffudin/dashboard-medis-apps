@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'rme_page.dart';
 
 class TenagaMedisPage extends StatelessWidget {
   const TenagaMedisPage({super.key});
@@ -197,11 +198,16 @@ class TenagaMedisPage extends StatelessWidget {
   }
 
   // MODIFIKASI: Menambahkan Material & InkWell agar card bisa diklik dengan warna highlight putih
-  Widget _buildMenuGlass(String title, IconData icon, Color color) {
+  Widget _buildMenuGlass(
+    String title,
+    IconData icon,
+    Color color, {
+    VoidCallback? onTap,
+  }) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () {},
+        onTap: onTap ?? () {}, // Gunakan parameter onTap di sini
         borderRadius: BorderRadius.circular(20),
         splashColor: Colors.white.withOpacity(0.3), // Warna splash saat diklik
         highlightColor: Colors.white.withOpacity(
