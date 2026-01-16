@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'widgets/dashboard_item.dart';
 import 'analytics_page.dart';
+import 'tenaga_medis_page.dart'; //
 
 class DashboardPage extends StatelessWidget {
   final bool isDarkMode;
@@ -70,7 +71,16 @@ class DashboardPage extends StatelessWidget {
                     ),
                   ),
                 ),
-                DashboardItem(icon: Icons.receipt, title: 'Request'),
+                DashboardItem(
+                  icon: Icons.medical_information,
+                  title: 'Tenaga Medis',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const TenagaMedisPage(),
+                    ),
+                  ),
+                ),
                 DashboardItem(icon: Icons.contact_mail, title: 'Contact Us'),
               ],
             ),
