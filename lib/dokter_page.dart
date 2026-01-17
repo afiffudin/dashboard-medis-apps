@@ -18,9 +18,17 @@ class DokterPage extends StatefulWidget {
 class _DokterPageState extends State<DokterPage> {
   // --- STATE VARIABLES ---
   DateTime selectedDate = DateTime.now();
-  TimeOfDay selectedTime = TimeOfDay.now(); // Jam yang tampil di layar
-  List<dynamic> apiSchedules = [];
+  TimeOfDay selectedTime = TimeOfDay.now();
+
+  List<dynamic> apiSchedules = []; // Data asli dari API (setelah filter jam)
+  List<dynamic> filteredSchedules =
+      []; // Data untuk ditampilkan (setelah filter nama & poli)
   bool isLoading = false;
+
+  // Controller & Dropdown State
+  final TextEditingController _searchDoctorController = TextEditingController();
+  String selectedSpecialization = "Semua Poli";
+  List<String> specializationOptions = ["Semua Poli"];
 
   final FlutterTts flutterTts = FlutterTts();
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -30,9 +38,7 @@ class _DokterPageState extends State<DokterPage> {
   @override
   void initState() {
     super.initState();
-
-    // WAJIB: Tambahkan ini agar saat kabel dicabut, HP tidak 'tidur'
-    // dan koneksi Wi-Fi ke server laptop tetap aktif.
+    // Mencegah HP masuk mode tidur agar koneksi socket/http tetap stabil saat kabel dicabut
     WakelockPlus.enable();
     _initializeAll();
   }
@@ -43,7 +49,7 @@ class _DokterPageState extends State<DokterPage> {
     await _setupTts();
     fetchSchedulesFromBackend(selectedDate);
 
-    // Auto refresh setiap 15 detik agar tetap sinkron dengan backend
+    // Auto refresh data setiap 15 detik
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
       if (mounted) fetchSchedulesFromBackend(selectedDate, isSilent: true);
     });
@@ -52,11 +58,13 @@ class _DokterPageState extends State<DokterPage> {
   @override
   void dispose() {
     _autoRefreshTimer?.cancel();
+    _searchDoctorController.dispose();
     flutterTts.stop();
+    WakelockPlus.disable();
     super.dispose();
   }
 
-  // --- PERMISSIONS & SETUP ---
+  // --- LOGIC: PERMISSIONS & SETUP ---
   Future<void> _requestPermissions() async {
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
@@ -64,13 +72,12 @@ class _DokterPageState extends State<DokterPage> {
   }
 
   Future<void> _setupNotifications() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    await flutterLocalNotificationsPlugin.initialize(
+      const InitializationSettings(android: androidInit),
+    );
 
-    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    const channel = AndroidNotificationChannel(
       'jadwal_selesai_channel',
       'Pengumuman Jadwal',
       importance: Importance.max,
@@ -89,8 +96,7 @@ class _DokterPageState extends State<DokterPage> {
 
   // --- LOGIC: TRIGGER SUARA & NOTIFIKASI ---
   Future<void> _triggerAlert(String doctorName) async {
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
+    const androidDetails = AndroidNotificationDetails(
       'jadwal_selesai_channel',
       'Pengumuman Jadwal',
       importance: Importance.max,
@@ -107,24 +113,22 @@ class _DokterPageState extends State<DokterPage> {
     );
   }
 
-  // --- LOGIC: FETCH & FILTER (BERDASARKAN JAM DI LAYAR) ---
-  Future<void> fetchSchedulesFromBackend(
-    DateTime date, {
-    bool isSilent = false,
-  }) async {
+  // --- LOGIC: FETCH & FILTER ---
+  Future<void> fetchSchedulesFromBackend(DateTime date,
+      {bool isSilent = false}) async {
     if (!isSilent) setState(() => isLoading = true);
 
     String formattedDate = DateFormat('yyyy-MM-dd').format(date);
-    final url = Uri.parse(
-      'http://192.168.1.31:3000/api/schedules?date=$formattedDate', //http://10.0.2.2:3000(via emulator)
-    );
+    // Ganti IP di bawah sesuai dengan IP Laptop Anda
+    final url =
+        Uri.parse('http://192.168.1.31:3000/api/schedules?date=$formattedDate');
 
     try {
       final response = await http.get(url).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         List<dynamic> rawData = json.decode(response.body);
 
-        // --- INI KUNCINYA: Membandingkan dengan jam yang dipilih user di UI ---
+        // 1. Filter berdasarkan Jam yang dipilih di Layar (Simulasi)
         DateTime comparisonTime = DateTime(
           date.year,
           date.month,
@@ -133,13 +137,12 @@ class _DokterPageState extends State<DokterPage> {
           selectedTime.minute,
         );
 
-        List<dynamic> filteredData = [];
+        List<dynamic> activeNow = [];
+        Set<String> uniquePolis = {"Semua Poli"};
 
         for (var item in rawData) {
           String endTimeStr = item['end_time'] ?? "23:59";
           List<String> parts = endTimeStr.split(':');
-
-          // Waktu selesai dokter dari Database
           DateTime endDateTime = DateTime(
             date.year,
             date.month,
@@ -148,71 +151,66 @@ class _DokterPageState extends State<DokterPage> {
             int.parse(parts[1]),
           );
 
-          // Jika jam yang dipilih di UI sudah melewati jam selesai dokter
           if (comparisonTime.isAfter(endDateTime)) {
-            // Cek apakah sebelumnya dokter ini ada di list (berarti dia baru saja selesai)
+            // Jika dokter baru saja hilang dari daftar, bunyikan suara
             bool wasInList = apiSchedules.any((old) => old['id'] == item['id']);
             if (wasInList) {
               _triggerAlert(item['Doctor']['name']);
             }
-            // Tidak dimasukkan ke filteredData (alias dihapus dari layar)
           } else {
-            filteredData.add(item);
+            activeNow.add(item);
+            uniquePolis.add(item['Doctor']['specialization']);
           }
         }
 
         if (mounted) {
           setState(() {
-            apiSchedules = filteredData;
+            apiSchedules = activeNow;
+            specializationOptions = uniquePolis.toList()..sort();
+
+            // Validasi agar pilihan dropdown tidak error jika data hilang
+            if (!specializationOptions.contains(selectedSpecialization)) {
+              selectedSpecialization = "Semua Poli";
+            }
+
+            _applyLocalFilters();
             isLoading = false;
           });
         }
       }
     } catch (e) {
       if (!isSilent && mounted) setState(() => isLoading = false);
-      debugPrint("Error Fetching: $e");
+      debugPrint("Error: $e");
     }
   }
 
-  // --- PICKERS ---
-  Future<void> _selectDate(BuildContext context) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: selectedDate,
-      firstDate: DateTime(2024),
-      lastDate: DateTime(2030),
-    );
-    if (picked != null && picked != selectedDate) {
-      setState(() => selectedDate = picked);
-      fetchSchedulesFromBackend(picked);
-    }
+  void _applyLocalFilters() {
+    setState(() {
+      filteredSchedules = apiSchedules.where((item) {
+        final doctorName = item['Doctor']['name'].toString().toLowerCase();
+        final specName = item['Doctor']['specialization'].toString();
+        final searchQuery = _searchDoctorController.text.toLowerCase();
+
+        bool matchName = doctorName.contains(searchQuery);
+        bool matchSpec = (selectedSpecialization == "Semua Poli") ||
+            (specName == selectedSpecialization);
+
+        return matchName && matchSpec;
+      }).toList();
+    });
   }
 
-  Future<void> _selectTime(BuildContext context) async {
-    final TimeOfDay? picked = await showTimePicker(
-      context: context,
-      initialTime: selectedTime,
-    );
-    if (picked != null && picked != selectedTime) {
-      setState(() {
-        selectedTime = picked;
-      });
-      // Langsung panggil fetch agar UI terupdate sesuai jam baru yang dipilih
-      fetchSchedulesFromBackend(selectedDate);
-    }
-  }
-
+  // --- UI BUILDING ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text(
-          'Jadwal Dokter & Pasien',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-        ),
+        title: const Text('Dashboard RS Digital',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        centerTitle: true,
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -224,109 +222,72 @@ class _DokterPageState extends State<DokterPage> {
         ),
         child: Column(
           children: [
-            const SizedBox(height: 110),
-            _buildFilterBar(),
+            const SizedBox(height: 100),
+            _buildMainFilterCard(),
+            _buildSearchRow(),
             Expanded(
               child: isLoading
                   ? const Center(
-                      child: CircularProgressIndicator(
-                        color: Colors.cyanAccent,
-                      ),
-                    )
+                      child:
+                          CircularProgressIndicator(color: Colors.cyanAccent))
                   : ListView(
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                       children: [
                         _buildSectionHeader(
-                          "Dokter Praktek Aktif",
-                          Icons.medical_services,
-                        ),
+                            "Dokter Praktek Aktif", Icons.medical_services),
                         _buildGlassList(
-                          apiSchedules.isEmpty
+                          filteredSchedules.isEmpty
                               ? [
-                                  const Padding(
-                                    padding: EdgeInsets.all(20),
-                                    child: Center(
-                                      child: Text(
-                                        "Tidak ada praktek jam ini",
-                                        style: TextStyle(color: Colors.white38),
-                                      ),
-                                    ),
-                                  ),
+                                  const Center(
+                                      child: Padding(
+                                          padding: EdgeInsets.all(20),
+                                          child: Text(
+                                              "Tidak ada dokter ditemukan",
+                                              style: TextStyle(
+                                                  color: Colors.white38))))
                                 ]
-                              : apiSchedules.map((item) {
-                                  final doctor = item['Doctor'];
+                              : filteredSchedules.map((item) {
+                                  final doc = item['Doctor'];
                                   return _buildDoctorTile(
-                                    doctor['name'],
-                                    doctor['specialization'],
+                                    doc['name'],
+                                    doc['specialization'],
                                     "${item['start_time']} - ${item['end_time']}",
-                                    Color(
-                                      int.parse(
-                                        doctor['accent_color'].replaceAll(
-                                          '#',
-                                          '0xFF',
-                                        ),
-                                      ),
-                                    ),
+                                    Color(int.parse(doc['accent_color']
+                                        .replaceAll('#', '0xFF'))),
                                   );
                                 }).toList(),
                         ),
                         const SizedBox(height: 25),
                         _buildSectionHeader(
-                          "Jadwal Pasien Kontrol",
-                          Icons.edit_calendar,
-                        ),
+                            "Jadwal Pasien Kontrol", Icons.edit_calendar),
                         _buildGlassList([
+                          _buildPatientTile("Bpk. Joko", "Pasca Operasi",
+                              "10:30 WIB", Icons.loop),
                           _buildPatientTile(
-                            "Bpk. Joko",
-                            "Pasca Operasi",
-                            "10:30 WIB",
-                            Icons.loop,
-                          ),
-                          _buildPatientTile(
-                            "Ibu Maria",
-                            "Diabetes",
-                            "11:00 WIB",
-                            Icons.loop,
-                          ),
+                              "Ibu Maria", "Diabetes", "11:00 WIB", Icons.loop),
                         ]),
                         const SizedBox(height: 25),
                         _buildSectionHeader(
-                          "Jadwal Pasien Operasi",
-                          Icons.emergency,
-                        ),
+                            "Jadwal Pasien Operasi", Icons.emergency),
                         _buildGlassList([
-                          _buildPatientTile(
-                            "An. Rian",
-                            "Appendectomy",
-                            "14:00 - OK 1",
-                            Icons.bolt,
-                            color: Colors.redAccent,
-                          ),
+                          _buildPatientTile("An. Rian", "Appendectomy",
+                              "14:00 - OK 1", Icons.bolt,
+                              color: Colors.redAccent),
                         ]),
                         const SizedBox(height: 25),
                         _buildSectionHeader(
-                          "Appointment BPJS",
-                          Icons.assignment_turned_in,
-                        ),
+                            "Appointment BPJS", Icons.assignment_turned_in),
                         _buildGlassList([
-                          _buildPatientTile(
-                            "Bpk. Slamet",
-                            "Rujukan FKTP",
-                            "Antrian A-12",
-                            Icons.credit_card,
-                            color: Colors.tealAccent,
-                          ),
+                          _buildPatientTile("Bpk. Slamet", "Rujukan FKTP",
+                              "Antrian A-12", Icons.credit_card,
+                              color: Colors.tealAccent),
                         ]),
                         const SizedBox(height: 25),
                         _buildSectionHeader("Pasien Batal", Icons.cancel),
                         _buildGlassList([
-                          _buildPatientTile(
-                            "Sdr. Kevin",
-                            "Batal oleh Sistem",
-                            "10:00 WIB",
-                            Icons.block,
-                            color: Colors.grey,
-                          ),
+                          _buildPatientTile("Sdr. Kevin", "Batal oleh Sistem",
+                              "10:00 WIB", Icons.block,
+                              color: Colors.grey),
                         ]),
                       ],
                     ),
@@ -337,83 +298,136 @@ class _DokterPageState extends State<DokterPage> {
     );
   }
 
-  // --- UI WIDGETS ---
-  Widget _buildFilterBar() {
+  // --- HELPER WIDGETS ---
+
+  Widget _buildMainFilterCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.2)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () => _selectDate(),
+              child: Column(
+                children: [
+                  const Text("Tanggal",
+                      style: TextStyle(color: Colors.white70, fontSize: 11)),
+                  const SizedBox(height: 4),
+                  Text(DateFormat('dd MMM yyyy').format(selectedDate),
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ),
+          Container(width: 1, height: 30, color: Colors.white24),
+          Expanded(
+            child: InkWell(
+              onTap: () => _selectTime(),
+              child: Column(
+                children: [
+                  const Text("Jam Simulasi",
+                      style: TextStyle(color: Colors.white70, fontSize: 11)),
+                  const SizedBox(height: 4),
+                  Text(selectedTime.format(context),
+                      style: const TextStyle(
+                          color: Colors.orangeAccent,
+                          fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchRow() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Container(
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(25),
-          border: Border.all(color: Colors.white.withOpacity(0.2)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: InkWell(
-                onTap: () => _selectDate(context),
-                child: Column(
-                  children: [
-                    const Text(
-                      "Pilih Tanggal",
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                    Text(
-                      DateFormat('dd MMM yyyy').format(selectedDate),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: TextField(
+                controller: _searchDoctorController,
+                onChanged: (_) => _applyLocalFilters(),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: const InputDecoration(
+                  hintText: "Cari dokter...",
+                  hintStyle: TextStyle(color: Colors.white38),
+                  border: InputBorder.none,
+                  icon: Icon(Icons.search, color: Colors.cyanAccent, size: 18),
                 ),
               ),
             ),
-            Container(width: 1, height: 30, color: Colors.white24),
-            Expanded(
-              child: InkWell(
-                onTap: () => _selectTime(context),
-                child: Column(
-                  children: [
-                    const Text(
-                      "Jam Simulasi",
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                    Text(
-                      selectedTime.format(context),
-                      style: const TextStyle(
-                        color: Colors.orangeAccent,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 2,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  isExpanded: true,
+                  value: selectedSpecialization,
+                  dropdownColor: const Color(0xFF203A43),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  icon: const Icon(Icons.filter_list,
+                      color: Colors.cyanAccent, size: 18),
+                  items: specializationOptions.map((String value) {
+                    return DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(value),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() {
+                        selectedSpecialization = val;
+                        _applyLocalFilters();
+                      });
+                    }
+                  },
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildSectionHeader(String title, IconData icon) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10, left: 5),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.cyanAccent, size: 18),
-          const SizedBox(width: 8),
-          Text(
-            title,
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(children: [
+        Icon(icon, color: Colors.cyanAccent, size: 20),
+        const SizedBox(width: 10),
+        Text(title,
             style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold)),
+      ]),
     );
   }
 
@@ -429,74 +443,65 @@ class _DokterPageState extends State<DokterPage> {
   }
 
   Widget _buildDoctorTile(
-    String name,
-    String spec,
-    String status,
-    Color accent,
-  ) {
+      String name, String spec, String status, Color accent) {
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: accent.withOpacity(0.2),
-        child: Icon(Icons.person, color: accent),
-      ),
-      title: Text(
-        name,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      subtitle: Text(
-        spec,
-        style: const TextStyle(color: Colors.white60, fontSize: 12),
-      ),
+          backgroundColor: accent.withOpacity(0.2),
+          child: Icon(Icons.person, color: accent)),
+      title: Text(name,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+      subtitle: Text(spec,
+          style: const TextStyle(color: Colors.white60, fontSize: 12)),
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: accent.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Text(
-          status,
-          style: TextStyle(
-            color: accent,
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+            color: accent.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10)),
+        child: Text(status,
+            style: TextStyle(
+                color: accent, fontSize: 10, fontWeight: FontWeight.bold)),
       ),
     );
   }
 
-  Widget _buildPatientTile(
-    String name,
-    String desc,
-    String time,
-    IconData icon, {
-    Color color = Colors.blueAccent,
-  }) {
+  Widget _buildPatientTile(String name, String desc, String time, IconData icon,
+      {Color color = Colors.blueAccent}) {
     return ListTile(
       leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, color: color, size: 18),
-      ),
-      title: Text(
-        name,
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-      ),
-      subtitle: Text(
-        desc,
-        style: const TextStyle(color: Colors.white54, fontSize: 12),
-      ),
-      trailing: Text(
-        time,
-        style: const TextStyle(color: Colors.white70, fontSize: 11),
-      ),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+              color: color.withOpacity(0.1), shape: BoxShape.circle),
+          child: Icon(icon, color: color, size: 18)),
+      title:
+          Text(name, style: const TextStyle(color: Colors.white, fontSize: 14)),
+      subtitle: Text(desc,
+          style: const TextStyle(color: Colors.white54, fontSize: 12)),
+      trailing: Text(time,
+          style: const TextStyle(color: Colors.white70, fontSize: 11)),
     );
+  }
+
+  // --- PICKERS ---
+  Future<void> _selectDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: selectedDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(2030),
+    );
+    if (picked != null) {
+      setState(() => selectedDate = picked);
+      fetchSchedulesFromBackend(picked);
+    }
+  }
+
+  Future<void> _selectTime() async {
+    final TimeOfDay? picked =
+        await showTimePicker(context: context, initialTime: selectedTime);
+    if (picked != null) {
+      setState(() => selectedTime = picked);
+      fetchSchedulesFromBackend(selectedDate);
+    }
   }
 }
